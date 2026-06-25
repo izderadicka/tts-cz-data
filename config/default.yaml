@@ -42,6 +42,7 @@ segment:
   loudness_normalize: false   # optional per-clip EBU R128 normalisation
 
 quality:
+  reasr_check: false          # re-transcribe each clip and check CER (needs ASR; slow)
   max_cer: 0.20               # reject clip if re-ASR char error rate exceeds this
   review_cer: 0.10            # flag (not reject) clips above this for manual review
   min_snr_db: 10.0
