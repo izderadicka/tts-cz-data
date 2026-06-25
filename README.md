@@ -63,5 +63,16 @@ with a small override file to change models, device, thresholds, etc.
 
 ## Status
 
-Implemented: project skeleton, config/manifest infrastructure, **stage 0 ingest**.
-Remaining stages are stubbed and built per the milestones in the project plan.
+Implemented and tested end to end (synthetic audio):
+- infrastructure: config loader, JSONL manifests, CLI orchestrator, workspace layout
+- **stage 0 ingest** (ffmpeg) · **stage 1 text-prep** (Czech split + normalisation)
+- **stage 2 transcribe** (faster-whisper) · **stage 3 align — ASR-bridge strategy**
+- **stage 4 segment** (silence-snapped cutting) · **stage 5 quality** (+ flagged.csv)
+- **stage 6 export** (LJSpeech + train/val + stats + Piper notes)
+- **eval/compare_aligners** harness for comparing strategies
+
+To complete: **stage 3 forced-alignment strategy** (torchaudio-MMS / aeneas / MFA)
+— a guided stub in `ttsdata/stages/align/forced.py` (heavy deps + real audio
+needed to validate, so not shipped untested).
+
+Run the tests with `python -m pytest`.
