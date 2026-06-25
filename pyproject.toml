@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ttsdata"
+version = "0.1.0"
+description = "Pipeline to build TTS training datasets from Czech audiobooks + ebooks"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "soundfile>=0.12",
+    "numpy>=1.24",
+]
+
+# Heavier / optional pieces are grouped so the core skeleton installs fast on CPU.
+[project.optional-dependencies]
+asr = [
+    "faster-whisper>=1.0",
+]
+align = [
+    "torch>=2.1",
+    "torchaudio>=2.1",
+]
+text = [
+    "num2words>=0.5.13",
+    "sentence-splitter>=1.4",
+]
+vad = [
+    "silero-vad>=5.1",
+]
+quality = [
+    "jiwer>=3.0",
+]
+dev = [
+    "pytest>=7.4",
+]
+
+[project.scripts]
+ttsdata = "ttsdata.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ttsdata*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

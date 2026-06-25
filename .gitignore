@@ -1,0 +1,33 @@
+# Pipeline data (raw audio/text, intermediate work, built datasets) — never commit
+/data/
+!/data/.gitkeep
+
+# Models / caches
+*.pt
+*.bin
+*.onnx
+.cache/
+
+# Audio/media
+*.wav
+*.opus
+*.mp3
+*.flac
+*.m4a
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
