@@ -36,13 +36,14 @@ class Segment:
 class Aligner(Protocol):
     """Strategy interface. Implementations live in sibling modules."""
 
-    def align_chapter(
-        self, cfg: Config, chapter: dict, sentences: list[dict]
+    def align(
+        self, cfg: Config, chapters: list[dict], sentences: list[dict]
     ) -> list[Segment]:
-        """Return ordered segments for one chapter.
+        """Return ordered segments for a whole book.
 
-        ``chapter`` is an ingest/transcribe record (carries ``asr_wav`` and,
-        for the ASR bridge, time-stamped ``words``). ``sentences`` are the
-        book's stage-1 sentence records for this book.
+        ``chapters`` are transcribe-stage records (ordered; each carries
+        ``asr_wav`` and time-stamped ``words``). ``sentences`` are the book's
+        stage-1 sentence records. Book-level alignment lets a strategy resolve
+        chapter boundaries and skipped front/back matter naturally.
         """
         ...
