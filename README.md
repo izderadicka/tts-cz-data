@@ -41,12 +41,29 @@ data/raw/<book_id>/
 
 ## Install
 
+First the one **system** dependency (not pip-installable), needed by the ingest
+stage to decode opus/mp3:
+
 ```bash
-python -m pip install -e .            # core skeleton (fast)
-python -m pip install -e '.[asr,align,text,vad,quality,dev]'   # full pipeline
+apt-get install ffmpeg        # or: brew install ffmpeg
 ```
 
-System dependency: **ffmpeg** (`apt-get install ffmpeg` / `brew install ffmpeg`).
+Then the Python package. The core install is light (numpy, soundfile, pyyaml,
+num2words) and runs text-prep, segment, quality and export. The heavy/situational
+pieces are extras, lazily imported so a stage only needs its extra when you run it:
+
+```bash
+python -m venv .venv && source .venv/bin/activate   # recommended
+python -m pip install -e .            # core (text-prep, segment, quality, export)
+python -m pip install -e '.[asr]'     # + faster-whisper for transcription
+python -m pip install -e '.[gpu]'     # + torch/torchaudio (CUDA, forced aligner)
+python -m pip install -e '.[quality]' # + jiwer for the optional re-ASR CER check
+python -m pip install -e '.[all]'     # everything (full pipeline)
+```
+
+> Use a virtualenv. Installing into a distro's **system** Python can fail building
+> `num2words`'s `docopt` dependency on Debian/Ubuntu (patched setuptools); a venv
+> with current `setuptools` avoids this.
 
 ## Run
 

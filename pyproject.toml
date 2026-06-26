@@ -9,34 +9,39 @@ description = "Pipeline to build TTS training datasets from Czech audiobooks + e
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+# Core runtime: everything the always-on stages import directly. num2words is
+# here (not optional) because correct Czech text-prep depends on it. ffmpeg is a
+# SYSTEM dependency (not pip-installable) — see README.
 dependencies = [
     "pyyaml>=6.0",
-    "tqdm>=4.66",
-    "soundfile>=0.12",
     "numpy>=1.24",
+    "soundfile>=0.12",
+    "num2words>=0.5.13",
 ]
 
-# Heavier / optional pieces are grouped so the core skeleton installs fast on CPU.
+# Situational/heavy pieces are grouped as extras so the core install stays light
+# (no torch/CTranslate2) for stages that don't need them. Each is lazily imported
+# and raises a clear "install X" message only when its stage actually runs.
 [project.optional-dependencies]
 asr = [
-    "faster-whisper>=1.0",
+    "faster-whisper>=1.0",   # stage 2 transcribe (ASR)
 ]
-align = [
-    "torch>=2.1",
+gpu = [
+    "torch>=2.1",            # CUDA auto-detect + (future) torchaudio forced aligner
     "torchaudio>=2.1",
 ]
-text = [
-    "num2words>=0.5.13",
-    "sentence-splitter>=1.4",
-]
-vad = [
-    "silero-vad>=5.1",
-]
 quality = [
-    "jiwer>=3.0",
+    "jiwer>=3.0",            # optional re-ASR CER check in stage 5
 ]
 dev = [
     "pytest>=7.4",
+]
+# Convenience: install the full pipeline at once.
+all = [
+    "faster-whisper>=1.0",
+    "torch>=2.1",
+    "torchaudio>=2.1",
+    "jiwer>=3.0",
 ]
 
 [project.scripts]
