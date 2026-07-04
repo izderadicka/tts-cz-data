@@ -1,0 +1,55 @@
+# Default configuration for the ttsdata pipeline.
+# Every knob lives here so behaviour changes without touching code.
+# Override a subset by passing --config path/to/override.yaml (merged on top).
+
+language: cs
+
+paths:
+  # Input layout (per book):
+  #   data/raw/<book_id>/book.txt            full book as plain UTF-8 text
+  #   data/raw/<book_id>/audio/*.opus|*.mp3  chapter audio, sorted by filename
+  raw: data/raw
+  work: data/work      # per-stage intermediate artifacts + manifests
+  dataset: data/dataset  # final exported dataset(s)
+
+audio:
+  asr_sample_rate: 16000      # mono copy fed to ASR / forced aligners
+  master_sample_rate: 22050   # high-quality copy clips are cut from (Piper default)
+  channels: 1
+  sample_format: s16          # 16-bit PCM
+
+asr:
+  backend: faster-whisper
+  model: small                # CPU-friendly default; use large-v3 on CUDA
+  device: cpu                 # cpu | cuda | auto
+  compute_type: int8          # int8 (CPU) | float16 (CUDA)
+  language: cs
+  beam_size: 5
+  vad_filter: true
+  word_timestamps: true
+
+align:
+  strategy: asr_bridge        # asr_bridge | forced
+  min_score: 0.5              # drop segments whose token-match ratio is below this
+  forced:
+    backend: aeneas           # aeneas | torchaudio_mms | mfa
+
+segment:
+  min_duration: 1.0           # seconds; shorter clips get merged with neighbours
+  max_duration: 15.0          # seconds; longer clips get split at internal silence
+  silence_pad: 0.1            # seconds of padding kept around each clip
+  vad: silero                 # silence detector used to snap cut points
+  loudness_normalize: false   # optional per-clip EBU R128 normalisation
+
+quality:
+  reasr_check: false          # re-transcribe each clip and check CER (needs ASR; slow)
+  max_cer: 0.20               # reject clip if re-ASR char error rate exceeds this
+  review_cer: 0.10            # flag (not reject) clips above this for manual review
+  min_snr_db: 10.0
+  max_silence_ratio: 0.5
+
+export:
+  format: ljspeech            # ljspeech (universal) — Piper consumes this directly
+  sample_rate: 22050          # output wav rate
+  val_fraction: 0.02
+  seed: 42
