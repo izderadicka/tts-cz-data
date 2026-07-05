@@ -6,11 +6,19 @@ Decodes each chapter audio file into two WAV copies:
 
 Writes one chapter record per file to the ingest manifest. A book maps to a
 single narrator, so every chapter shares one ``speaker_id`` (the book id).
+
+Chapters are processed in parallel (``ingest.jobs`` config, 0 = CPU count);
+the work is ffmpeg subprocesses, so a thread pool is all we need.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
+from tqdm import tqdm
 
 from .. import audio
 from ..config import Config
@@ -22,6 +30,45 @@ from ..workspace import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _process_chapter(
+    book_id: str,
+    order: int,
+    src: Path,
+    asr_wav: Path,
+    master_wav: Path,
+    asr_sr: int,
+    master_sr: int,
+    channels: int,
+    sample_format: str,
+) -> dict:
+    """Probe one chapter and decode its two WAV copies (in parallel)."""
+    info = audio.probe(src)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        asr_fut = pool.submit(
+            audio.decode_to_wav, src, asr_wav, asr_sr, channels, sample_format
+        )
+        master_fut = pool.submit(
+            audio.decode_to_wav, src, master_wav, master_sr, channels, sample_format
+        )
+        asr_fut.result()
+        master_fut.result()
+
+    return {
+        "book_id": book_id,
+        "speaker_id": book_id,
+        "chapter_id": src.stem,
+        "order": order,
+        "src_path": str(src),
+        "asr_wav": str(asr_wav),
+        "master_wav": str(master_wav),
+        "duration": info["duration"],
+        "codec": info["codec"],
+        "src_sample_rate": info["sample_rate"],
+        "sample_rate_asr": asr_sr,
+        "sample_rate_master": master_sr,
+    }
 
 
 def run(cfg: Config, book_id: str, force: bool = False) -> list[dict]:
@@ -44,35 +91,37 @@ def run(cfg: Config, book_id: str, force: bool = False) -> list[dict]:
     master_sr = int(cfg.require("audio.master_sample_rate"))
     channels = int(cfg.get("audio.channels", 1))
     sample_format = cfg.get("audio.sample_format", "s16")
+    jobs = int(cfg.get("ingest.jobs", 0)) or os.cpu_count() or 1
 
     records: list[dict] = []
-    for order, src in enumerate(audio_files):
-        chapter_id = src.stem
-        info = audio.probe(src)
-        asr_wav = asr_dir / f"{chapter_id}.wav"
-        master_wav = master_dir / f"{chapter_id}.wav"
-
-        audio.decode_to_wav(src, asr_wav, asr_sr, channels, sample_format)
-        audio.decode_to_wav(src, master_wav, master_sr, channels, sample_format)
-
-        records.append(
-            {
-                "book_id": book_id,
-                "speaker_id": book_id,
-                "chapter_id": chapter_id,
-                "order": order,
-                "src_path": str(src),
-                "asr_wav": str(asr_wav),
-                "master_wav": str(master_wav),
-                "duration": info["duration"],
-                "codec": info["codec"],
-                "src_sample_rate": info["sample_rate"],
-                "sample_rate_asr": asr_sr,
-                "sample_rate_master": master_sr,
-            }
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [
+            pool.submit(
+                _process_chapter,
+                book_id,
+                order,
+                src,
+                asr_dir / f"{src.stem}.wav",
+                master_dir / f"{src.stem}.wav",
+                asr_sr,
+                master_sr,
+                channels,
+                sample_format,
+            )
+            for order, src in enumerate(audio_files)
+        ]
+        progress = tqdm(
+            as_completed(futures), total=len(futures),
+            desc=f"ingest {book_id}", unit="ch",
         )
-        log.info("ingest: %s/%s (%.1fs)", book_id, chapter_id, info["duration"])
+        for future in progress:
+            rec = future.result()
+            records.append(rec)
+            log.debug(
+                "ingest: %s/%s (%.1fs)", book_id, rec["chapter_id"], rec["duration"]
+            )
 
+    records.sort(key=lambda r: r["order"])
     write_jsonl(out_path, records)
     total = sum(r["duration"] for r in records)
     log.info("ingest: %s — %d chapters, %.1f min", book_id, len(records), total / 60)

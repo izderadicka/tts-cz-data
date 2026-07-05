@@ -18,6 +18,9 @@ audio:
   channels: 1
   sample_format: s16          # 16-bit PCM
 
+ingest:
+  jobs: 0                     # chapters processed in parallel; 0 = auto (CPU count)
+
 asr:
   backend: faster-whisper
   model: small                # CPU-friendly default; use large-v3 on CUDA
