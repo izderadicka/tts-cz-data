@@ -17,6 +17,7 @@ dependencies = [
     "numpy>=1.24",
     "soundfile>=0.12",
     "num2words>=0.5.13",
+    "tqdm>=4.68.3"
 ]
 
 # Situational/heavy pieces are grouped as extras so the core install stays light
