@@ -35,7 +35,7 @@ asr:
 
 align:
   strategy: asr_bridge        # asr_bridge | forced
-  min_score: 0.5              # drop segments whose token-match ratio is below this
+  min_score: 0.7              # drop segments whose token-match ratio is below this
   forced:
     backend: aeneas           # aeneas | torchaudio_mms | mfa
 
@@ -49,7 +49,7 @@ segment:
 
 quality:
   jobs: 0                     # clips checked in parallel; 0 = auto (with reasr_check: ASR worker sizing, else CPU count)
-  reasr_check: false          # re-transcribe each clip and check CER (needs ASR; slow)
+  reasr_check: true          # re-transcribe each clip and check CER (needs ASR; slow)
   max_cer: 0.20               # reject clip if re-ASR char error rate exceeds this
   review_cer: 0.10            # flag (not reject) clips above this for manual review
   min_snr_db: 10.0
