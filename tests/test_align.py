@@ -68,6 +68,74 @@ def test_aligner_partial_match_scores_below_one():
     assert segs[0].score == 0.5
 
 
+def test_aligner_extends_span_over_garbled_edge_words():
+    cfg = load_config()
+    # ASR garbles the proper noun at the sentence edge; the span must still
+    # cover its audio instead of stopping at the last matched word.
+    sentences = [
+        _sentence("b", 0, "Potom pohledl na Vincenta"),
+        _sentence("b", 1, "Dalsi veta pokracuje tady"),
+    ]
+    chapter = {
+        "chapter_id": "ch01",
+        "order": 0,
+        "words": _words([
+            ("Potom", 0.0, 0.4),
+            ("pohledl", 0.4, 0.9),
+            ("na", 0.9, 1.0),
+            ("Vinsenta", 1.0, 1.6),   # garbled -> unmatched
+            ("Dalsi", 2.5, 2.9),
+            ("veta", 2.9, 3.2),
+            ("pokracuje", 3.2, 3.8),
+            ("tady", 3.8, 4.0),
+        ]),
+    }
+    segs = AsrBridgeAligner().align(cfg, [chapter], sentences)
+    s0 = next(s for s in segs if s.seg_id == "b_s00000")
+    assert s0.score == 0.75
+    assert s0.end == 1.6  # extended over the garbled word, not 1.0
+
+    s1 = next(s for s in segs if s.seg_id == "b_s00001")
+    assert s1.start == 2.5  # fully matched neighbour is untouched
+
+
+def test_aligner_edge_extension_stops_at_pause():
+    cfg = load_config()
+    # "Mario Puzo" title-page case: the garbled tail is followed, after a
+    # pause, by more unmatched audio (the next title line). Extension must
+    # take the garbled word but never cross the pause.
+    sentences = [_sentence("b", 0, "Mario Puzo")]
+    chapter = {
+        "chapter_id": "ch01",
+        "order": 0,
+        "words": _words([
+            ("Mario", 0.0, 0.76),
+            ("Putzo", 0.76, 1.5),      # garbled -> unmatched, contiguous
+            ("poslednik", 2.26, 3.06),  # unrelated, after a 0.76 s pause
+        ]),
+    }
+    segs = AsrBridgeAligner().align(cfg, [chapter], sentences)
+    assert len(segs) == 1
+    assert segs[0].end == 1.5  # covers "Putzo", stops before "poslednik"
+
+
+def test_aligner_extends_span_backward_for_garbled_leading_word():
+    cfg = load_config()
+    sentences = [_sentence("b", 0, "Vincent odpovedel klidne")]
+    chapter = {
+        "chapter_id": "ch01",
+        "order": 0,
+        "words": _words([
+            ("Vincento", 0.0, 0.5),    # garbled -> unmatched
+            ("odpovedel", 0.5, 1.1),
+            ("klidne", 1.1, 1.5),
+        ]),
+    }
+    segs = AsrBridgeAligner().align(cfg, [chapter], sentences)
+    assert len(segs) == 1
+    assert segs[0].start == 0.0  # extended back over the garbled first word
+
+
 def test_aligner_skips_unmatched_sentence():
     cfg = load_config()
     sentences = [

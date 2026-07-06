@@ -10,13 +10,20 @@ its label via character error rate (CER). Outcome is one of:
 
 The re-ASR check needs faster-whisper + jiwer and is off by default
 (``quality.reasr_check: false``) so the stage runs cheaply on CPU.
+
+Clips are checked in parallel (``quality.jobs`` config, 0 = auto). With re-ASR
+enabled the worker count follows the transcribe stage's ASR sizing (workers
+share one Whisper model; CTranslate2 runs the calls truly concurrently),
+otherwise it defaults to the CPU count for the cheap I/O-bound checks.
 """
 
 from __future__ import annotations
 
 import csv
 import logging
+import os
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import soundfile as sf
@@ -59,6 +66,63 @@ def _cer(reference: str, hypothesis: str) -> float | None:
     return float(jiwer.cer(ref, hyp))
 
 
+def _check_clip(
+    cfg: Config,
+    clip: dict,
+    min_dur: float,
+    max_dur: float,
+    max_cer: float,
+    review_cer: float,
+    min_snr: float,
+    max_sil: float,
+    reasr: bool,
+) -> dict:
+    """Worker task: run all checks on one clip and mutate its record in place."""
+    flags: list[str] = []
+    reject = False
+    m = _audio_metrics(clip["wav"])
+    clip.update(m)
+
+    if clip["duration"] < min_dur or clip["duration"] > max_dur:
+        flags.append("duration"); reject = True
+    if m["peak"] >= 0.999:
+        flags.append("clipping")
+    if m["silence_ratio"] > max_sil:
+        flags.append("silence"); reject = True
+    if m["snr_db"] < min_snr:
+        flags.append("low_snr")
+
+    if reasr:
+        from .transcribe import transcribe_file
+
+        hyp = transcribe_file(cfg, clip["wav"])["text"]
+        cer = _cer(clip["normalized"], hyp)
+        clip["cer"] = None if cer is None else round(cer, 3)
+        clip["asr_text"] = hyp
+        if cer is not None:
+            if cer > max_cer:
+                flags.append("cer_high"); reject = True
+            elif cer > review_cer:
+                flags.append("cer_review")
+
+    clip["flags"] = flags
+    clip["status"] = "reject" if reject else ("review" if flags else "pass")
+    return clip
+
+
+def _resolve_jobs(cfg: Config, reasr: bool) -> int:
+    """Worker count (0 in config = auto). With re-ASR the pool must match the
+    ASR model's concurrency, so reuse the transcribe stage's sizing."""
+    jobs = int(cfg.get("quality.jobs", 0))
+    if jobs:
+        return jobs
+    if reasr:
+        from . import transcribe
+
+        return transcribe._resolve_jobs(cfg, transcribe._resolve_device(cfg)[0])
+    return os.cpu_count() or 1
+
+
 def run(cfg: Config, book_id: str, force: bool = False) -> list[dict]:
     out_path = stage_manifest(cfg, book_id, "quality")
     if out_path.exists() and not force:
@@ -76,39 +140,32 @@ def run(cfg: Config, book_id: str, force: bool = False) -> list[dict]:
     min_snr = float(cfg.get("quality.min_snr_db", 10.0))
     max_sil = float(cfg.get("quality.max_silence_ratio", 0.5))
     reasr = bool(cfg.get("quality.reasr_check", False))
+    jobs = _resolve_jobs(cfg, reasr)
 
     if reasr:
-        from .transcribe import transcribe_file
+        # Load the model up front so worker threads share one instance instead
+        # of racing the cache.
+        from .transcribe import _get_model
 
-    for clip in tqdm(clips, desc=f"quality: {book_id}"):
-        flags: list[str] = []
-        reject = False
-        m = _audio_metrics(clip["wav"])
-        clip.update(m)
+        _get_model(cfg)
 
-        if clip["duration"] < min_dur or clip["duration"] > max_dur:
-            flags.append("duration"); reject = True
-        if m["peak"] >= 0.999:
-            flags.append("clipping")
-        if m["silence_ratio"] > max_sil:
-            flags.append("silence"); reject = True
-        if m["snr_db"] < min_snr:
-            flags.append("low_snr")
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [
+            pool.submit(
+                _check_clip, cfg, clip,
+                min_dur, max_dur, max_cer, review_cer, min_snr, max_sil, reasr,
+            )
+            for clip in clips
+        ]
+        progress = tqdm(
+            as_completed(futures), total=len(futures),
+            desc=f"quality: {book_id}", unit="clip",
+        )
+        for future in progress:
+            future.result()
 
-        if reasr:
-            hyp = transcribe_file(cfg, clip["wav"])["text"]
-            cer = _cer(clip["normalized"], hyp)
-            clip["cer"] = None if cer is None else round(cer, 3)
-            clip["asr_text"] = hyp
-            if cer is not None:
-                if cer > max_cer:
-                    flags.append("cer_high"); reject = True
-                elif cer > review_cer:
-                    flags.append("cer_review")
-
-        clip["flags"] = flags
-        clip["status"] = "reject" if reject else ("review" if flags else "pass")
-
+    # Workers mutate the ordered `clips` list in place, so output order matches
+    # the serial run regardless of completion order.
     write_jsonl(out_path, clips)
 
     # Flagged-for-review export (everything not a clean pass).
