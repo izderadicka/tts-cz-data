@@ -24,6 +24,7 @@ class Segment:
     start: float       # seconds
     end: float         # seconds
     score: float       # alignment confidence in [0, 1]
+    matched_words: list[str]  # ASR tokens that matched this sentence
 
     @property
     def duration(self) -> float:

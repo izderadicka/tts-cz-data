@@ -78,20 +78,23 @@ class AsrBridgeAligner:
         # Per-sentence accumulators.
         n = len(sentences)
         matched = [0] * n
+        matched_words = [[] for _ in range(n)]
         starts: list[list[float]] = [[] for _ in range(n)]
         ends: list[list[float]] = [[] for _ in range(n)]
         chapters_hit: list[Counter] = [Counter() for _ in range(n)]
 
         sm = SequenceMatcher(None, book_tokens, asr_tokens, autojunk=False)
+        log.info(f"Start sequence matching - ASR tokens {len(asr_tokens)} vs ebook tokens {len(book_tokens)}")
         for bi, ai, size in sm.get_matching_blocks():
             for k in range(size):
                 si = book_owner[bi + k]
                 m = asr_meta[ai + k]
                 matched[si] += 1
+                matched_words[si].append(asr_tokens[ai + k])
                 starts[si].append(m["start"])
                 ends[si].append(m["end"])
                 chapters_hit[si][m["chapter_id"]] += 1
-
+        log.info("Matching done")
         segments: list[Segment] = []
         for si, sent in enumerate(sentences):
             total = len(sent["tokens"])
@@ -110,6 +113,7 @@ class AsrBridgeAligner:
                     start=round(start, 3),
                     end=round(end, 3),
                     score=round(matched[si] / total, 3),
+                    matched_words=matched_words[si],
                 )
             )
 
