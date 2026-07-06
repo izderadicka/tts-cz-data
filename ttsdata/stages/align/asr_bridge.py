@@ -14,6 +14,11 @@ Algorithm:
   3. ``difflib.SequenceMatcher`` (diacritic-folded tokens) finds matching blocks.
   4. Per sentence: gather matched ASR token times -> [start, end]; score =
      matched_tokens / sentence_tokens.
+  5. If a sentence's *edge* tokens went unmatched (ASR typically garbles proper
+     nouns), the span from step 4 stops short and would truncate the audio
+     mid-sentence. The garbled words are still in the ASR stream right past the
+     matched span, so the span is extended over them — bounded by the unmatched
+     token count, a pause guard, and tokens matched by neighbouring sentences.
 
 Complexity is difflib's (≈O(n·m) worst case); fine for chapter/book scales. For
 very large books this can be chunked later, but the baseline keeps it simple.
@@ -54,6 +59,41 @@ def _flatten_asr(chapters: list[dict]) -> tuple[list[str], list[dict]]:
     return tokens, meta
 
 
+# A pause longer than this between ASR words is treated as a sentence boundary;
+# span extension over garbled edge words never crosses it.
+MAX_EXTEND_GAP_S = 0.5
+
+
+def _extend_forward(
+    meta: list[dict], claimed: list[bool], chapter_id: str,
+    idx: int, end: float, n_tokens: int,
+) -> float:
+    """Extend ``end`` over unmatched ASR words following matched index ``idx``.
+
+    Walks at most ``n_tokens + 1`` words (ASR may split one book word into two),
+    stopping at a word matched by another sentence, a chapter change, or a pause.
+    """
+    for j in range(idx + 1, min(idx + n_tokens + 2, len(meta))):
+        m = meta[j]
+        if claimed[j] or m["chapter_id"] != chapter_id or m["start"] - end > MAX_EXTEND_GAP_S:
+            break
+        end = max(end, m["end"])
+    return end
+
+
+def _extend_backward(
+    meta: list[dict], claimed: list[bool], chapter_id: str,
+    idx: int, start: float, n_tokens: int,
+) -> float:
+    """Mirror of :func:`_extend_forward` for unmatched leading tokens."""
+    for j in range(idx - 1, max(idx - n_tokens - 2, -1), -1):
+        m = meta[j]
+        if claimed[j] or m["chapter_id"] != chapter_id or start - m["end"] > MAX_EXTEND_GAP_S:
+            break
+        start = min(start, m["start"])
+    return start
+
+
 def _flatten_book(sentences: list[dict]) -> tuple[list[str], list[int]]:
     """Return (folded tokens, owner) where owner[i] = sentence index."""
     tokens: list[str] = []
@@ -79,30 +119,48 @@ class AsrBridgeAligner:
         n = len(sentences)
         matched = [0] * n
         matched_words = [[] for _ in range(n)]
-        starts: list[list[float]] = [[] for _ in range(n)]
-        ends: list[list[float]] = [[] for _ in range(n)]
+        asr_ids: list[list[int]] = [[] for _ in range(n)]
+        book_pos: list[list[int]] = [[] for _ in range(n)]
         chapters_hit: list[Counter] = [Counter() for _ in range(n)]
+        claimed = [False] * len(asr_tokens)
+
+        # First global book-token index per sentence -> token position within it.
+        sent_first: dict[int, int] = {}
+        for gi, si in enumerate(book_owner):
+            sent_first.setdefault(si, gi)
 
         sm = SequenceMatcher(None, book_tokens, asr_tokens, autojunk=False)
         log.info(f"Start sequence matching - ASR tokens {len(asr_tokens)} vs ebook tokens {len(book_tokens)}")
         for bi, ai, size in sm.get_matching_blocks():
             for k in range(size):
                 si = book_owner[bi + k]
-                m = asr_meta[ai + k]
                 matched[si] += 1
                 matched_words[si].append(asr_tokens[ai + k])
-                starts[si].append(m["start"])
-                ends[si].append(m["end"])
-                chapters_hit[si][m["chapter_id"]] += 1
+                asr_ids[si].append(ai + k)
+                book_pos[si].append(bi + k - sent_first[si])
+                chapters_hit[si][asr_meta[ai + k]["chapter_id"]] += 1
+                claimed[ai + k] = True
         log.info("Matching done")
         segments: list[Segment] = []
         for si, sent in enumerate(sentences):
             total = len(sent["tokens"])
             if matched[si] == 0 or total == 0:
                 continue
-            start = min(starts[si])
-            end = max(max(ends[si]), start)  # guard against inverted spans
+            start = min(asr_meta[i]["start"] for i in asr_ids[si])
+            end = max(max(asr_meta[i]["end"] for i in asr_ids[si]), start)
             chapter_id = chapters_hit[si].most_common(1)[0][0]
+
+            # Recover audio of garbled (unmatched) edge words — see module doc, step 5.
+            lead = min(book_pos[si])
+            trail = total - 1 - max(book_pos[si])
+            if trail > 0:
+                end = _extend_forward(
+                    asr_meta, claimed, chapter_id, max(asr_ids[si]), end, trail
+                )
+            if lead > 0:
+                start = _extend_backward(
+                    asr_meta, claimed, chapter_id, min(asr_ids[si]), start, lead
+                )
             segments.append(
                 Segment(
                     book_id=sent["book_id"],
