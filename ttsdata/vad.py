@@ -57,13 +57,16 @@ def snap_to_silence(samples: np.ndarray, sr: int, t: float, window_s: float) -> 
     """Move a cut time ``t`` to the quietest spot within +/- ``window_s``.
 
     Cutting at a local energy minimum avoids clipping words mid-syllable.
+    Only the window around ``t`` is analysed, so this stays cheap even when
+    ``samples`` is a whole chapter.
     """
-    rms, frame_len = frame_rms(samples, sr)
-    center = int(round(t * sr / frame_len))
-    span = max(1, int(round(window_s * sr / frame_len)))
-    lo = max(0, center - span)
-    hi = min(len(rms), center + span + 1)
-    if hi <= lo:
+    # Pad the slice by one frame so silence starting right at the window edge
+    # still yields a fully-quiet frame regardless of framing alignment.
+    frame_len = max(1, int(sr * FRAME_MS / 1000))
+    lo_sample = max(0, int(round((t - window_s) * sr)) - frame_len)
+    hi_sample = min(len(samples), int(round((t + window_s) * sr)) + frame_len)
+    if hi_sample <= lo_sample:
         return t
-    best = lo + int(np.argmin(rms[lo:hi]))
-    return best * frame_len / sr
+    rms, frame_len = frame_rms(samples[lo_sample:hi_sample], sr)
+    best = int(np.argmin(rms))
+    return (lo_sample + best * frame_len) / sr

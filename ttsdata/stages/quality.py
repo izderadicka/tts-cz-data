@@ -20,6 +20,7 @@ import unicodedata
 
 import numpy as np
 import soundfile as sf
+from tqdm import tqdm
 
 from .. import vad
 from ..config import Config
@@ -79,7 +80,7 @@ def run(cfg: Config, book_id: str, force: bool = False) -> list[dict]:
     if reasr:
         from .transcribe import transcribe_file
 
-    for clip in clips:
+    for clip in tqdm(clips, desc=f"quality: {book_id}"):
         flags: list[str] = []
         reject = False
         m = _audio_metrics(clip["wav"])

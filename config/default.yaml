@@ -40,6 +40,7 @@ align:
     backend: aeneas           # aeneas | torchaudio_mms | mfa
 
 segment:
+  jobs: 0                     # chapters cut in parallel; 0 = auto (CPU count)
   min_duration: 1.0           # seconds; shorter clips get merged with neighbours
   max_duration: 15.0          # seconds; longer clips get split at internal silence
   silence_pad: 0.1            # seconds of padding kept around each clip

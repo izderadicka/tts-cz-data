@@ -21,6 +21,7 @@ import random
 
 import numpy as np
 import soundfile as sf
+from tqdm import tqdm
 
 from ..config import Config
 from ..manifest import read_jsonl, write_json
@@ -78,7 +79,7 @@ def run(cfg: Config, book_id: str, force: bool = False) -> dict:
     wav_dir.mkdir(parents=True, exist_ok=True)
 
     rows: list[dict] = []
-    for c in kept:
+    for c in tqdm(kept, desc=f"export: {book_id}"):
         audio, sr = sf.read(c["wav"], dtype="float32", always_2d=False)
         audio = audio.mean(axis=1) if audio.ndim == 2 else audio
         audio = _resample(audio, sr, out_sr)
