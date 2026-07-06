@@ -68,6 +68,12 @@ def cmd_list_books(args) -> int:
     return 0
 
 
+def cmd_listen(args) -> int:
+    from . import listen
+
+    return listen.main(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ttsdata", description=__doc__)
     parser.add_argument("--config", help="Override config YAML merged on defaults")
@@ -92,6 +98,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_list = sub.add_parser("list-books", help="List discovered books")
     p_list.set_defaults(func=cmd_list_books)
+
+    p_listen = sub.add_parser("listen", help="Play clips interactively with their text")
+    p_listen.add_argument("manifest", help="clips.jsonl (segment/quality) or flagged.csv")
+    p_listen.add_argument(
+        "--random", action="store_true", help="Shuffle playback order"
+    )
+    p_listen.add_argument(
+        "--status", choices=["pass", "review", "reject"],
+        help="Only clips with this quality status",
+    )
+    p_listen.set_defaults(func=cmd_listen)
 
     return parser
 
