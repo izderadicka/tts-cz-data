@@ -66,14 +66,17 @@ def _process_chapter(
     audio, sr = sf.read(chapter["master_wav"], dtype="float32", always_2d=False)
     audio = vad.to_mono(np.asarray(audio))
     total_s = len(audio) / sr
+    # One RMS pass per chapter; boundary snapping then works on frame indices.
+    rms, frame_len = vad.frame_rms(audio, sr)
+    thr = vad.silence_threshold(rms)
 
     chap_segs.sort(key=lambda s: s["start"])
     merged = _merge_short(chap_segs, min_dur, max_dur, max_gap=1.0)
 
     clips: list[dict] = []
     for idx, s in enumerate(merged):
-        start = vad.snap_to_silence(audio, sr, s["start"], window_s=0.2)
-        end = vad.snap_to_silence(audio, sr, s["end"], window_s=0.2)
+        start = vad.snap_start(rms, frame_len, sr, thr, s["start"])
+        end = vad.snap_end(rms, frame_len, sr, thr, s["end"])
         start = max(0.0, start - pad)
         end = min(total_s, end + pad)
         if end <= start:

@@ -53,20 +53,70 @@ def estimate_snr_db(samples: np.ndarray, sr: int) -> float:
     return 10.0 * np.log10(speech_p / max(noise_p, 1e-8))
 
 
-def snap_to_silence(samples: np.ndarray, sr: int, t: float, window_s: float) -> float:
-    """Move a cut time ``t`` to the quietest spot within +/- ``window_s``.
+def snap_end(
+    rms: np.ndarray,
+    frame_len: int,
+    sr: int,
+    thr: float,
+    t: float,
+    *,
+    search_back_s: float = 0.24,
+    search_fwd_s: float = 0.8,
+    min_pause_s: float = 0.3,
+) -> float:
+    """Move a segment end ``t`` to just after the last speech before a real pause.
 
-    Cutting at a local energy minimum avoids clipping words mid-syllable.
-    Only the window around ``t`` is analysed, so this stays cheap even when
-    ``samples`` is a whole chapter.
+    ASR end timestamps run short and a naive local energy minimum lands on
+    intra-word dips (e.g. the ~160 ms stop closure in "Pippi"), clipping the
+    final syllable. Instead, walk forward through precomputed frame RMS and cut
+    after the last frame above ``thr`` once a silence run of ``min_pause_s``
+    (too long for a stop closure) confirms the sentence really ended. Without
+    such a pause in the window, return ``t`` unchanged — never cut into speech.
     """
-    # Pad the slice by one frame so silence starting right at the window edge
-    # still yields a fully-quiet frame regardless of framing alignment.
-    frame_len = max(1, int(sr * FRAME_MS / 1000))
-    lo_sample = max(0, int(round((t - window_s) * sr)) - frame_len)
-    hi_sample = min(len(samples), int(round((t + window_s) * sr)) + frame_len)
-    if hi_sample <= lo_sample:
-        return t
-    rms, frame_len = frame_rms(samples[lo_sample:hi_sample], sr)
-    best = int(np.argmin(rms))
-    return (lo_sample + best * frame_len) / sr
+    f_lo = max(0, int((t - search_back_s) * sr / frame_len))
+    f_hi = min(len(rms), int((t + search_fwd_s) * sr / frame_len) + 1)
+    min_pause = max(1, int(min_pause_s * sr / frame_len))
+    last_speech = None
+    run = 0
+    for f in range(f_lo, f_hi):
+        if rms[f] >= thr:
+            last_speech = f
+            run = 0
+        else:
+            run += 1
+            if run >= min_pause:
+                if last_speech is None:
+                    return t
+                return (last_speech + 1) * frame_len / sr
+    return t
+
+
+def snap_start(
+    rms: np.ndarray,
+    frame_len: int,
+    sr: int,
+    thr: float,
+    t: float,
+    *,
+    search_back_s: float = 0.24,
+    search_fwd_s: float = 0.8,
+    min_pause_s: float = 0.3,
+) -> float:
+    """Mirror of :func:`snap_end`: move a segment start to just before the
+    first speech after a real pause, walking backwards from ``t``."""
+    f_hi = min(len(rms) - 1, int((t + search_back_s) * sr / frame_len))
+    f_lo = max(0, int((t - search_fwd_s) * sr / frame_len))
+    min_pause = max(1, int(min_pause_s * sr / frame_len))
+    first_speech = None
+    run = 0
+    for f in range(f_hi, f_lo - 1, -1):
+        if rms[f] >= thr:
+            first_speech = f
+            run = 0
+        else:
+            run += 1
+            if run >= min_pause:
+                if first_speech is None:
+                    return t
+                return first_speech * frame_len / sr
+    return t
