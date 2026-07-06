@@ -31,6 +31,9 @@ def _override_paths(tmp_path):
     cfg._data["paths"]["work"] = str(tmp_path / "work")
     cfg._data["paths"]["dataset"] = str(tmp_path / "dataset")
     cfg._data["paths"]["raw"] = str(tmp_path / "raw")
+    # Pin off regardless of the config default: these tests use synthetic tones
+    # and must run without ASR models.
+    cfg._data["quality"]["reasr_check"] = False
     cfg.repo_root = tmp_path  # paths already absolute
     return cfg
 

@@ -103,6 +103,11 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    # faster-whisper logs "Processing audio…" / "VAD filter removed…" at INFO per
+    # file; with re-ASR that's one pair per clip. Show them only with -v.
+    logging.getLogger("faster_whisper").setLevel(
+        logging.DEBUG if args.verbose else logging.WARNING
+    )
     return args.func(args)
 
 
