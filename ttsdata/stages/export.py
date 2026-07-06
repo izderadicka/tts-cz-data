@@ -1,14 +1,20 @@
-"""Stage 6 — dataset assembly & export (LJSpeech format).
+"""Stage 6 — dataset assembly & export.
 
-Collects clips with ``status == pass`` into the universal LJSpeech layout that
-Piper, Coqui/VITS and Tacotron all consume:
+Collects clips with ``status == pass`` into a training-ready layout:
 
     dataset/<book_id>/
       wavs/<clip_id>.wav
-      metadata.csv            # clip_id|text|normalized   (pipe-separated)
+      metadata.csv            # pipe-separated, per export.format (below)
       metadata_train.csv / metadata_val.csv
       dataset_stats.json
       PIPER.md                # ready-to-run preprocessing notes
+
+``export.format`` selects the metadata row shape:
+
+  * ``ljspeech`` — ``clip_id|text|normalized`` (universal; Piper, Coqui/VITS,
+    Tacotron all consume it)
+  * ``piper``    — ``clip_id.wav|normalized`` (Piper's two-column form: wav
+    file name + the text to phonemize, nothing to strip at train time)
 
 Audio is resampled to ``export.sample_rate`` if needed. The val split is a
 deterministic fraction so runs are reproducible.
@@ -74,6 +80,9 @@ def run(cfg: Config, book_id: str, force: bool = False) -> dict:
         log.warning("export: %s — no clips passed quality; nothing to export", book_id)
         return {}
 
+    fmt = cfg.get("export.format", "ljspeech")
+    if fmt not in ("ljspeech", "piper"):
+        raise ValueError(f"Unknown export.format: {fmt!r} (expected ljspeech | piper)")
     out_sr = int(cfg.get("export.sample_rate", 22050))
     wav_dir = dataset_dir / "wavs"
     wav_dir.mkdir(parents=True, exist_ok=True)
@@ -97,9 +106,12 @@ def run(cfg: Config, book_id: str, force: bool = False) -> dict:
     def _write_metadata(path, records):
         with path.open("w", encoding="utf-8") as fh:
             for r in records:
-                text = r["text"].replace("|", " ")
                 norm = r["normalized"].replace("|", " ")
-                fh.write(f"{r['clip_id']}|{text}|{norm}\n")
+                if fmt == "piper":
+                    fh.write(f"{r['clip_id']}.wav|{norm}\n")
+                else:
+                    text = r["text"].replace("|", " ")
+                    fh.write(f"{r['clip_id']}|{text}|{norm}\n")
 
     _write_metadata(metadata_path, rows)
     _write_metadata(dataset_dir / "metadata_train.csv", [r for r in rows if r["clip_id"] not in val_ids])
@@ -109,18 +121,22 @@ def run(cfg: Config, book_id: str, force: bool = False) -> dict:
     stats["val_clips"] = len(val_ids)
     stats["sample_rate"] = out_sr
     write_json(dataset_dir / "dataset_stats.json", stats)
-    _write_piper_notes(cfg, dataset_dir, out_sr)
+    _write_piper_notes(cfg, dataset_dir, out_sr, fmt)
 
     log.info("export: %s — %d clips, %.2f h -> %s",
              book_id, stats["clips"], stats["total_hours"], dataset_dir)
     return stats
 
 
-def _write_piper_notes(cfg: Config, dataset_dir, out_sr: int) -> None:
+def _write_piper_notes(cfg: Config, dataset_dir, out_sr: int, fmt: str) -> None:
     lang = cfg.get("language", "cs")
+    if fmt == "piper":
+        layout = "Piper's two-column form (`metadata.csv`: `file.wav|normalized`)"
+    else:
+        layout = "LJSpeech format (`metadata.csv`: `id|text|normalized`)"
     notes = f"""# Training this dataset with Piper
 
-This dataset is in LJSpeech format (`metadata.csv`: `id|text|normalized`).
+This dataset is in {layout}.
 
 ## Preprocess
 

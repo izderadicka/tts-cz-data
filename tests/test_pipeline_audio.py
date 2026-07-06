@@ -75,7 +75,17 @@ def test_segment_quality_export(tmp_path):
     assert (dataset_dir / "PIPER.md").exists()
     meta = (dataset_dir / "metadata.csv").read_text(encoding="utf-8").splitlines()
     assert len(meta) == stats["clips"]
-    assert "|" in meta[0]
+    assert meta[0].count("|") == 2  # ljspeech: id|text|normalized
+
+    # piper format: file.wav|normalized only
+    cfg._data["export"]["format"] = "piper"
+    stats = export.run(cfg, book_id, force=True)
+    meta = (dataset_dir / "metadata.csv").read_text(encoding="utf-8").splitlines()
+    assert len(meta) == stats["clips"]
+    wav_name, norm = meta[0].split("|")
+    assert wav_name.endswith(".wav")
+    assert (dataset_dir / "wavs" / wav_name).exists()
+    assert norm == "první věta"
 
 
 def test_flagged_csv_written(tmp_path):
