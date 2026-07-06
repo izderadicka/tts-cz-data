@@ -30,6 +30,8 @@ asr:
   beam_size: 5
   vad_filter: true
   word_timestamps: true
+  cpu_threads: 4              # intra-op threads per worker (CPU only)
+  jobs: 0                     # chapters transcribed in parallel; 0 = auto (cpu: cores/cpu_threads, cuda: 1)
 
 align:
   strategy: asr_bridge        # asr_bridge | forced
