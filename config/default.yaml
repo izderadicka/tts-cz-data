@@ -56,7 +56,7 @@ quality:
   max_silence_ratio: 0.5
 
 export:
-  format: ljspeech            # ljspeech (id|text|normalized, universal) | piper (file.wav|normalized)
+  format: piper            # ljspeech (id|text|normalized, universal) | piper (file.wav|normalized)
   sample_rate: 22050          # output wav rate
   val_fraction: 0.02
   seed: 42
