@@ -100,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.set_defaults(func=cmd_list_books)
 
     p_listen = sub.add_parser("listen", help="Play clips interactively with their text")
-    p_listen.add_argument("manifest", help="clips.jsonl (segment/quality) or flagged.csv")
+    p_listen.add_argument("manifest", help="clips.jsonl (segment/quality), flagged.csv, or exported metadata.csv")
     p_listen.add_argument(
         "--random", action="store_true", help="Shuffle playback order"
     )

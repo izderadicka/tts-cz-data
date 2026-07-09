@@ -1,6 +1,7 @@
 """Interactive clip auditioning: play segmented clips and show their text.
 
-Reads a segment/quality ``clips.jsonl`` or the review ``flagged.csv`` and plays
+Reads a segment/quality ``clips.jsonl``, the review ``flagged.csv``, or an
+exported ``metadata.csv`` (pipe-separated, wavs in the sibling ``wavs/``) and plays
 each clip's WAV via ffplay (part of the ffmpeg system dependency), printing the
 label text. Advance with any key; ``r`` replays, ``b`` goes back, ``q`` quits.
 A keypress during playback stops the clip and acts immediately.
@@ -21,8 +22,33 @@ from .manifest import read_jsonl
 def _load_clips(path: Path) -> list[dict]:
     if path.suffix.lower() == ".csv":
         with path.open(newline="", encoding="utf-8") as fh:
+            if "|" in fh.readline():
+                return _load_metadata(path)
+            fh.seek(0)
             return list(csv.DictReader(fh))
     return read_jsonl(path)
+
+
+def _load_metadata(path: Path) -> list[dict]:
+    """Exported metadata.csv: pipe-separated, headerless.
+
+    Handles both row shapes (``file.wav|text`` and ``clip_id|text|normalized``);
+    wav files live in the ``wavs/`` dir next to the metadata file.
+    """
+    wav_dir = path.parent / "wavs"
+    clips = []
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            fields = line.rstrip("\n").split("|")
+            if not fields[0]:
+                continue
+            clip_id = fields[0].removesuffix(".wav")
+            clips.append({
+                "clip_id": clip_id,
+                "text": fields[1] if len(fields) > 1 else "",
+                "wav": str(wav_dir / f"{clip_id}.wav"),
+            })
+    return clips
 
 
 def _read_key() -> str:

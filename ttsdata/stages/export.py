@@ -13,7 +13,7 @@ Collects clips with ``status == pass`` into a training-ready layout:
 
   * ``ljspeech`` — ``clip_id|text|normalized`` (universal; Piper, Coqui/VITS,
     Tacotron all consume it)
-  * ``piper``    — ``clip_id.wav|normalized`` (Piper's two-column form: wav
+  * ``piper``    — ``clip_id.wav|text`` (Piper's two-column form: wav
     file name + the text to phonemize, nothing to strip at train time)
 
 Audio is resampled to ``export.sample_rate`` if needed, and optionally
@@ -151,11 +151,11 @@ def run(cfg: Config, book_id: str, force: bool = False) -> dict:
     def _write_metadata(path, records):
         with path.open("w", encoding="utf-8") as fh:
             for r in records:
-                norm = r["normalized"].replace("|", " ")
+                text = r["text"].replace("|", " ")
                 if fmt == "piper":
-                    fh.write(f"{r['clip_id']}.wav|{norm}\n")
+                    fh.write(f"{r['clip_id']}.wav|{text}\n")
                 else:
-                    text = r["text"].replace("|", " ")
+                    norm = r["normalized"].replace("|", " ")
                     fh.write(f"{r['clip_id']}|{text}|{norm}\n")
 
     _write_metadata(metadata_path, rows)
@@ -176,7 +176,7 @@ def run(cfg: Config, book_id: str, force: bool = False) -> dict:
 def _write_piper_notes(cfg: Config, dataset_dir, out_sr: int, fmt: str) -> None:
     lang = cfg.get("language", "cs")
     if fmt == "piper":
-        layout = "Piper's two-column form (`metadata.csv`: `file.wav|normalized`)"
+        layout = "Piper's two-column form (`metadata.csv`: `file.wav|text`)"
     else:
         layout = "LJSpeech format (`metadata.csv`: `id|text|normalized`)"
     notes = f"""# Training this dataset with Piper
