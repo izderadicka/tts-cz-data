@@ -60,23 +60,41 @@ def _process_chapter(
     max_dur: float,
     pad: float,
     wav_dir: Path,
+    vad_cfg: dict,
 ) -> list[dict]:
     """Cut one chapter's master WAV into clips, returning their manifest records."""
     chapter_id = chapter["chapter_id"]
     audio, sr = sf.read(chapter["master_wav"], dtype="float32", always_2d=False)
     audio = vad.to_mono(np.asarray(audio))
     total_s = len(audio) / sr
-    # One RMS pass per chapter; boundary snapping then works on frame indices.
-    rms, frame_len = vad.frame_rms(audio, sr)
-    thr = vad.silence_threshold(rms)
+
+    if vad_cfg["backend"] == "silero":
+        # Silero runs on the 16 kHz ASR copy (same source audio, so its
+        # timestamps map 1:1 onto the master); one pass per chapter.
+        asr_audio, asr_sr = sf.read(chapter["asr_wav"], dtype="float32", always_2d=False)
+        regions = vad.speech_regions(
+            np.asarray(asr_audio),
+            asr_sr,
+            threshold=vad_cfg["threshold"],
+            min_silence_ms=vad_cfg["min_silence_ms"],
+            speech_pad_ms=vad_cfg["speech_pad_ms"],
+        )
+    else:
+        # One RMS pass per chapter; boundary snapping then works on frame indices.
+        rms, frame_len = vad.frame_rms(audio, sr)
+        thr = vad.silence_threshold(rms)
 
     chap_segs.sort(key=lambda s: s["start"])
     merged = _merge_short(chap_segs, min_dur, max_dur, max_gap=1.0)
 
     clips: list[dict] = []
     for idx, s in enumerate(merged):
-        start = vad.snap_start(rms, frame_len, sr, thr, s["start"])
-        end = vad.snap_end(rms, frame_len, sr, thr, s["end"])
+        if vad_cfg["backend"] == "silero":
+            start = vad.snap_start_regions(regions, s["start"])
+            end = vad.snap_end_regions(regions, s["end"])
+        else:
+            start = vad.snap_start(rms, frame_len, sr, thr, s["start"])
+            end = vad.snap_end(rms, frame_len, sr, thr, s["end"])
         start = max(0.0, start - pad)
         end = min(total_s, end + pad)
         if end <= start:
@@ -119,6 +137,14 @@ def run(cfg: Config, book_id: str, force: bool = False) -> list[dict]:
     min_dur = float(cfg.get("segment.min_duration", 1.0))
     max_dur = float(cfg.get("segment.max_duration", 15.0))
     pad = float(cfg.get("segment.silence_pad", 0.1))
+    vad_cfg = {
+        "backend": str(cfg.get("segment.vad", "silero")),
+        "threshold": float(cfg.get("segment.vad_threshold", 0.5)),
+        "min_silence_ms": int(cfg.get("segment.vad_min_silence_ms", 300)),
+        "speech_pad_ms": int(cfg.get("segment.vad_speech_pad_ms", 30)),
+    }
+    if vad_cfg["backend"] not in ("silero", "energy"):
+        raise ValueError(f"Unknown segment.vad: {vad_cfg['backend']!r} (use silero or energy)")
     jobs = int(cfg.get("segment.jobs", 0)) or os.cpu_count() or 1
     wav_dir = stage_dir(cfg, book_id, "segment") / "wavs"
     wav_dir.mkdir(parents=True, exist_ok=True)
@@ -139,7 +165,8 @@ def run(cfg: Config, book_id: str, force: bool = False) -> list[dict]:
                 log.warning("segment: chapter %s missing from ingest; skipping", chapter_id)
                 continue
             futures[pool.submit(
-                _process_chapter, book_id, chapter, chap_segs, min_dur, max_dur, pad, wav_dir
+                _process_chapter, book_id, chapter, chap_segs,
+                min_dur, max_dur, pad, wav_dir, vad_cfg,
             )] = chapter_id
         progress = tqdm(
             as_completed(futures), total=len(futures),

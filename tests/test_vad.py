@@ -1,6 +1,7 @@
 """Tests for silence-aware boundary snapping (vad.snap_start / snap_end)."""
 
 import numpy as np
+import pytest
 
 from ttsdata import vad
 
@@ -56,3 +57,61 @@ def test_snap_start_mirrors_over_leading_dip():
 def test_snap_start_unchanged_without_pause():
     rms = _rms([(3.0, 1.0)])
     assert vad.snap_start(rms, FRAME_LEN, SR, THR, t=1.5) == 1.5
+
+
+# --- silero region snapping (pure helpers, no model needed) ---
+
+REGIONS = [(0.5, 2.0), (3.0, 5.0), (10.0, 20.0)]
+
+
+def test_snap_end_regions_extends_to_region_end():
+    # aligned end lands mid-region (e.g. ASR ran short of a final consonant)
+    assert vad.snap_end_regions(REGIONS, t=1.8) == 2.0
+
+
+def test_snap_end_regions_unchanged_when_speech_continues():
+    # region end is beyond the forward window -> never cut far into speech
+    assert vad.snap_end_regions(REGIONS, t=11.0) == 11.0
+
+
+def test_snap_end_regions_trims_back_from_gap():
+    # aligned end fell into the pause just after a region
+    assert vad.snap_end_regions(REGIONS, t=2.1) == 2.0
+
+
+def test_snap_end_regions_unchanged_deep_in_gap():
+    # too far past the region end to safely pull back
+    assert vad.snap_end_regions(REGIONS, t=2.6) == 2.6
+
+
+def test_snap_end_regions_before_all_regions():
+    assert vad.snap_end_regions(REGIONS, t=0.2) == 0.2
+
+
+def test_snap_start_regions_extends_to_region_start():
+    assert vad.snap_start_regions(REGIONS, t=3.4) == 3.0
+
+
+def test_snap_start_regions_unchanged_when_speech_precedes():
+    # region start is beyond the backward window -> keep aligned start
+    assert vad.snap_start_regions(REGIONS, t=15.0) == 15.0
+
+
+def test_snap_start_regions_advances_from_gap():
+    # aligned start fell into the pause just before a region
+    assert vad.snap_start_regions(REGIONS, t=2.8) == 3.0
+
+
+def test_snap_start_regions_unchanged_deep_in_gap():
+    assert vad.snap_start_regions(REGIONS, t=2.2) == 2.2
+
+
+def test_snap_regions_empty():
+    assert vad.snap_end_regions([], t=1.0) == 1.0
+    assert vad.snap_start_regions([], t=1.0) == 1.0
+
+
+def test_speech_regions_silent_audio_has_none():
+    pytest.importorskip("faster_whisper")
+    silence = np.zeros(16000 * 2, dtype=np.float32)
+    assert vad.speech_regions(silence) == []

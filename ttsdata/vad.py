@@ -1,11 +1,20 @@
 """Lightweight audio analysis: framing, RMS, silence detection, boundary snapping.
 
-Energy-based and dependency-free (numpy only) so the pipeline runs on CPU with
-no extra installs. ``silero-vad`` can be plugged in later as a higher-quality
-option behind the same helpers; the energy detector is the default.
+Two detectors are available for boundary snapping:
+
+- **silero** (default): the silero-vad ONNX model bundled with faster-whisper.
+  :func:`speech_regions` runs it once per chapter; the pure
+  :func:`snap_start_regions` / :func:`snap_end_regions` helpers then snap cut
+  points to region boundaries. Neural VAD catches low-energy unvoiced
+  consonants (final stop bursts, fricatives) that an energy threshold misses.
+- **energy**: numpy-only frame-RMS fallback (:func:`snap_start` /
+  :func:`snap_end`), used when faster-whisper isn't installed. The energy
+  helpers also back the quality stage's silence/SNR metrics.
 """
 
 from __future__ import annotations
+
+import bisect
 
 import numpy as np
 
@@ -119,4 +128,77 @@ def snap_start(
                 if first_speech is None:
                     return t
                 return first_speech * frame_len / sr
+    return t
+
+
+def speech_regions(
+    audio: np.ndarray,
+    sr: int = 16000,
+    *,
+    threshold: float = 0.5,
+    min_silence_ms: int = 300,
+    speech_pad_ms: int = 30,
+) -> list[tuple[float, float]]:
+    """Detect speech regions with silero VAD; returns [(start_s, end_s), ...].
+
+    Uses the silero ONNX model bundled with faster-whisper (thread-safe, its
+    RNN state is per-call). faster-whisper's defaults (2 s min silence, 400 ms
+    pad) target long-form ASR chunking, so the clip-cutting values are set
+    explicitly here.
+    """
+    try:
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+    except ImportError as e:
+        raise ImportError(
+            "silero VAD needs faster-whisper; install ttsdata[asr] "
+            "or set segment.vad: energy"
+        ) from e
+
+    opts = VadOptions(
+        threshold=threshold,
+        min_silence_duration_ms=min_silence_ms,
+        speech_pad_ms=speech_pad_ms,
+    )
+    chunks = get_speech_timestamps(to_mono(audio).astype(np.float32), opts, sampling_rate=sr)
+    return [(c["start"] / sr, c["end"] / sr) for c in chunks]
+
+
+def snap_end_regions(
+    regions: list[tuple[float, float]],
+    t: float,
+    *,
+    search_back_s: float = 0.24,
+    search_fwd_s: float = 0.8,
+) -> float:
+    """Snap a segment end ``t`` to the nearest speech-region end.
+
+    Inside a region, move to its end unless that lies beyond ``search_fwd_s``
+    (speech continues — never cut far into it, keep ``t``). In a gap, pull back
+    to the previous region's end if it's within ``search_back_s``.
+    """
+    i = bisect.bisect_right([r[0] for r in regions], t) - 1
+    if i < 0:
+        return t
+    end = regions[i][1]
+    if t < end:  # inside region i
+        return end if end <= t + search_fwd_s else t
+    return end if end >= t - search_back_s else t
+
+
+def snap_start_regions(
+    regions: list[tuple[float, float]],
+    t: float,
+    *,
+    search_back_s: float = 0.24,
+    search_fwd_s: float = 0.8,
+) -> float:
+    """Mirror of :func:`snap_end_regions`: snap a segment start to the
+    containing region's start, or forward to the next region's start."""
+    i = bisect.bisect_right([r[0] for r in regions], t) - 1
+    if i >= 0 and t < regions[i][1]:  # inside region i
+        start = regions[i][0]
+        return start if start >= t - search_fwd_s else t
+    if i + 1 < len(regions):  # in a gap (or before all regions)
+        nxt = regions[i + 1][0]
+        return nxt if nxt <= t + search_back_s else t
     return t

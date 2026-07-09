@@ -32,8 +32,10 @@ def _override_paths(tmp_path):
     cfg._data["paths"]["dataset"] = str(tmp_path / "dataset")
     cfg._data["paths"]["raw"] = str(tmp_path / "raw")
     # Pin off regardless of the config default: these tests use synthetic tones
-    # and must run without ASR models.
+    # and must run without ASR models (silero VAD wouldn't detect tones as
+    # speech anyway).
     cfg._data["quality"]["reasr_check"] = False
+    cfg._data["segment"]["vad"] = "energy"
     cfg.repo_root = tmp_path  # paths already absolute
     return cfg
 
@@ -69,6 +71,7 @@ def test_segment_quality_export(tmp_path):
     assert {c["status"] for c in qclips} <= {"pass", "review"}
     assert all("duration" not in c["flags"] for c in qclips)
 
+    cfg._data["export"]["format"] = "ljspeech"  # pin: asserted below
     stats = export.run(cfg, book_id, force=True)
     dataset_dir = tmp_path / "dataset" / book_id
     assert (dataset_dir / "metadata.csv").exists()

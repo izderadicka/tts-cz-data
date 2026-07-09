@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run *)",
+      "Bash(python3 -c \"import json,sys; d=json.loads\\(sys.stdin.read\\(\\)\\); print\\('start',d['start'],'end',d['end'],'dur',d['duration']\\)\")",
+      "Bash(ffprobe -hide_banner data/work/vondruska-falknovska-hut/04_segment/wavs/032_Kapitola_15_cast_druha_0009.wav)"
+    ]
+  }
+}
