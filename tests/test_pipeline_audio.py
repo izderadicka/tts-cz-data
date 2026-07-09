@@ -5,7 +5,10 @@ the stages a matching align manifest, so the audio-dependent half of the
 pipeline runs end to end without ffmpeg or ASR models.
 """
 
+import shutil
+
 import numpy as np
+import pytest
 import soundfile as sf
 
 from ttsdata.config import load_config
@@ -89,6 +92,41 @@ def test_segment_quality_export(tmp_path):
     assert wav_name.endswith(".wav")
     assert (dataset_dir / "wavs" / wav_name).exists()
     assert norm == "první věta"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not on PATH")
+def test_export_loudness_normalize(tmp_path):
+    cfg = _override_paths(tmp_path)
+    book_id = "synt3"
+    master = tmp_path / "work" / book_id / "00_ingest" / "master" / "ch01.wav"
+    _make_chapter_wav(master)
+    write_jsonl(stage_manifest(cfg, book_id, "ingest"), [
+        {"book_id": book_id, "speaker_id": book_id, "chapter_id": "ch01",
+         "order": 0, "master_wav": str(master), "duration": 5.0},
+    ])
+    write_jsonl(stage_manifest(cfg, book_id, "align"), [
+        {"book_id": book_id, "chapter_id": "ch01", "seg_id": "synt3_s00000",
+         "text": "První věta.", "normalized": "první věta", "start": 0.5,
+         "end": 2.0, "score": 1.0},
+    ])
+    segment.run(cfg, book_id, force=True)
+    quality.run(cfg, book_id, force=True)
+
+    export.run(cfg, book_id, force=True)
+    wav = next((tmp_path / "dataset" / book_id / "wavs").glob("*.wav"))
+    plain, _ = sf.read(wav, dtype="float32")
+    plain_rms = float(np.sqrt(np.mean(plain**2)))
+
+    cfg._data["export"]["loudness_normalize"] = True
+    export.run(cfg, book_id, force=True)
+    norm, _ = sf.read(wav, dtype="float32")
+    norm_rms = float(np.sqrt(np.mean(norm**2)))
+
+    # The 0.3-amplitude tone sits around -14 LUFS, louder than the -23 LUFS
+    # target, so normalisation must attenuate the clip toward the target.
+    assert norm_rms < plain_rms
+    assert float(np.max(np.abs(norm))) <= 1.0
+    assert abs(20 * np.log10(norm_rms) - (-23.0)) < 3.5
 
 
 def test_flagged_csv_written(tmp_path):

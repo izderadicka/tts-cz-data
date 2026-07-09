@@ -48,7 +48,6 @@ segment:
   vad_threshold: 0.5          # silero speech probability threshold
   vad_min_silence_ms: 300     # pause length that ends a speech region
   vad_speech_pad_ms: 30       # padding silero adds around detected speech
-  loudness_normalize: false   # optional per-clip EBU R128 normalisation
 
 quality:
   jobs: 0                     # clips checked in parallel; 0 = auto (with reasr_check: ASR worker sizing, else CPU count)
@@ -61,5 +60,7 @@ quality:
 export:
   format: piper            # ljspeech (id|text|normalized, universal) | piper (file.wav|normalized)
   sample_rate: 22050          # output wav rate
+  loudness_normalize: true   # per-clip EBU R128 normalisation of exported wavs
+  loudness_target_lufs: -23.0 # target integrated loudness when enabled
   val_fraction: 0.02
   seed: 42

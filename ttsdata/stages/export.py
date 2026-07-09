@@ -16,19 +16,25 @@ Collects clips with ``status == pass`` into a training-ready layout:
   * ``piper``    — ``clip_id.wav|normalized`` (Piper's two-column form: wav
     file name + the text to phonemize, nothing to strip at train time)
 
-Audio is resampled to ``export.sample_rate`` if needed. The val split is a
+Audio is resampled to ``export.sample_rate`` if needed, and optionally
+loudness-normalised per clip (``export.loudness_normalize``): integrated
+loudness is measured with ffmpeg's EBU R128 loudnorm analysis and a linear
+gain brings each clip to ``export.loudness_target_lufs``. The val split is a
 deterministic fraction so runs are reproducible.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import random
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import soundfile as sf
 from tqdm import tqdm
 
+from .. import audio as audio_util
 from ..config import Config
 from ..manifest import read_jsonl, write_json
 from ..workspace import stage_manifest
@@ -45,6 +51,35 @@ def _resample(audio: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
     x_old = np.linspace(0.0, duration, num=len(audio), endpoint=False)
     x_new = np.linspace(0.0, duration, num=n_out, endpoint=False)
     return np.interp(x_new, x_old, audio).astype(np.float32)
+
+
+def _measure_lufs(kept: list[dict]) -> dict[str, float]:
+    """Measure integrated loudness (LUFS) of each clip's segment-stage wav.
+
+    One short ffmpeg subprocess per clip, so measurements run in a thread pool.
+    Clips whose measurement fails or is non-finite (e.g. silence) are omitted.
+    """
+    def one(c: dict) -> tuple[str, float | None]:
+        info = audio_util.measure_loudness(c["wav"])
+        if info is None:
+            return c["clip_id"], None
+        try:
+            # loudnorm's JSON emits values as strings ("-inf" for silence).
+            lufs = float(info["input_i"])
+        except (KeyError, ValueError):
+            return c["clip_id"], None
+        return c["clip_id"], lufs if math.isfinite(lufs) else None
+
+    out: dict[str, float] = {}
+    with ThreadPoolExecutor() as pool:
+        for clip_id, lufs in tqdm(
+            pool.map(one, kept), total=len(kept), desc="measure loudness", unit="clip"
+        ):
+            if lufs is None:
+                log.warning("export: loudness measurement failed for %s; exporting unchanged", clip_id)
+            else:
+                out[clip_id] = lufs
+    return out
 
 
 def _stats(records: list[dict]) -> dict:
@@ -84,6 +119,10 @@ def run(cfg: Config, book_id: str, force: bool = False) -> dict:
     if fmt not in ("ljspeech", "piper"):
         raise ValueError(f"Unknown export.format: {fmt!r} (expected ljspeech | piper)")
     out_sr = int(cfg.get("export.sample_rate", 22050))
+    target_lufs = float(cfg.get("export.loudness_target_lufs", -23.0))
+    # Integrated loudness is unaffected by the resample below, so we measure the
+    # segment-stage wavs (already on disk) and only apply a gain here.
+    lufs = _measure_lufs(kept) if cfg.get("export.loudness_normalize", False) else {}
     wav_dir = dataset_dir / "wavs"
     wav_dir.mkdir(parents=True, exist_ok=True)
 
@@ -92,6 +131,12 @@ def run(cfg: Config, book_id: str, force: bool = False) -> dict:
         audio, sr = sf.read(c["wav"], dtype="float32", always_2d=False)
         audio = audio.mean(axis=1) if audio.ndim == 2 else audio
         audio = _resample(audio, sr, out_sr)
+        if c["clip_id"] in lufs:
+            gain = 10.0 ** ((target_lufs - lufs[c["clip_id"]]) / 20.0)
+            peak = float(np.max(np.abs(audio))) * gain
+            if peak > 0.99:  # keep PCM_16 samples clear of clipping
+                gain *= 0.99 / peak
+            audio = audio * gain
         dst = wav_dir / f"{c['clip_id']}.wav"
         sf.write(dst, audio, out_sr, subtype="PCM_16")
         rows.append(c)
