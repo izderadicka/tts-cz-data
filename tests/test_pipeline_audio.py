@@ -39,6 +39,9 @@ def _override_paths(tmp_path):
     # speech anyway).
     cfg._data["quality"]["reasr_check"] = False
     cfg._data["segment"]["vad"] = "energy"
+    # The loudness test asserts the difference normalisation makes, so start
+    # from a plain export regardless of the config default.
+    cfg._data["export"]["loudness_normalize"] = False
     cfg.repo_root = tmp_path  # paths already absolute
     return cfg
 
@@ -73,6 +76,8 @@ def test_segment_quality_export(tmp_path):
     # tone bursts are loud and non-silent -> should pass duration/silence checks
     assert {c["status"] for c in qclips} <= {"pass", "review"}
     assert all("duration" not in c["flags"] for c in qclips)
+    # abrupt clean tone onsets must not look like edge noise (guards defaults)
+    assert all("edge_noise" not in c["flags"] for c in qclips)
 
     cfg._data["export"]["format"] = "ljspeech"  # pin: asserted below
     stats = export.run(cfg, book_id, force=True)
@@ -83,15 +88,15 @@ def test_segment_quality_export(tmp_path):
     assert len(meta) == stats["clips"]
     assert meta[0].count("|") == 2  # ljspeech: id|text|normalized
 
-    # piper format: file.wav|normalized only
+    # piper format: file.wav|text only
     cfg._data["export"]["format"] = "piper"
     stats = export.run(cfg, book_id, force=True)
     meta = (dataset_dir / "metadata.csv").read_text(encoding="utf-8").splitlines()
     assert len(meta) == stats["clips"]
-    wav_name, norm = meta[0].split("|")
+    wav_name, text = meta[0].split("|")
     assert wav_name.endswith(".wav")
     assert (dataset_dir / "wavs" / wav_name).exists()
-    assert norm == "první věta"
+    assert text == "První věta."
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not on PATH")
@@ -127,6 +132,45 @@ def test_export_loudness_normalize(tmp_path):
     assert norm_rms < plain_rms
     assert float(np.max(np.abs(norm))) <= 1.0
     assert abs(20 * np.log10(norm_rms) - (-23.0)) < 3.5
+
+
+def test_verdicts_survive_quality_rerun_and_export(tmp_path):
+    from ttsdata import review
+
+    cfg = _override_paths(tmp_path)
+    book_id = "synt4"
+    master = tmp_path / "work" / book_id / "00_ingest" / "master" / "ch01.wav"
+    _make_chapter_wav(master)
+    write_jsonl(stage_manifest(cfg, book_id, "ingest"), [
+        {"book_id": book_id, "speaker_id": book_id, "chapter_id": "ch01",
+         "order": 0, "master_wav": str(master), "duration": 5.0},
+    ])
+    write_jsonl(stage_manifest(cfg, book_id, "align"), [
+        {"book_id": book_id, "chapter_id": "ch01", "seg_id": "synt4_s00000",
+         "text": "První věta.", "normalized": "první věta", "start": 0.5,
+         "end": 2.0, "score": 1.0},
+        {"book_id": book_id, "chapter_id": "ch01", "seg_id": "synt4_s00001",
+         "text": "Druhá věta.", "normalized": "druhá věta", "start": 3.0,
+         "end": 4.5, "score": 1.0},
+    ])
+    segment.run(cfg, book_id, force=True)
+    qclips = quality.run(cfg, book_id, force=True)
+    victim = next(c for c in qclips if c["status"] == "pass")
+
+    # A human rejects one passing clip; the verdict must survive a --force
+    # quality re-run and keep the clip out of the export.
+    review.save_verdict(
+        tmp_path / "work" / book_id / "review" / "verdicts.csv",
+        victim["clip_id"], "reject",
+    )
+    qclips = quality.run(cfg, book_id, force=True)
+    rec = next(c for c in qclips if c["clip_id"] == victim["clip_id"])
+    assert rec["status"] == "reject"
+    assert rec["verdict"] == "reject"
+
+    export.run(cfg, book_id, force=True)
+    meta = (tmp_path / "dataset" / book_id / "metadata.csv").read_text(encoding="utf-8")
+    assert victim["clip_id"] not in meta
 
 
 def test_flagged_csv_written(tmp_path):

@@ -4,6 +4,9 @@ Reads a segment/quality ``clips.jsonl``, the review ``flagged.csv``, or an
 exported ``metadata.csv`` (pipe-separated, wavs in the sibling ``wavs/``) and plays
 each clip's WAV via ffplay (part of the ffmpeg system dependency), printing the
 label text. Advance with any key; ``r`` replays, ``b`` goes back, ``q`` quits.
+``g`` approves and ``x`` rejects the clip — verdicts are saved per keypress to
+the book's ``review/verdicts.csv`` and folded into the quality manifest by
+``ttsdata review-apply`` (or automatically on the next quality run).
 A keypress during playback stops the clip and acts immediately.
 """
 
@@ -15,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import review
 from .audio import _require
 from .manifest import read_jsonl
 
@@ -72,17 +76,37 @@ def _read_key() -> str:
     return ch.lower()
 
 
-def _show(clip: dict, idx: int, total: int) -> None:
+def _flags_str(clip: dict) -> str:
+    flags = clip.get("flags")
+    if not flags:
+        return ""
+    return "|".join(flags) if isinstance(flags, list) else flags
+
+
+def _verdict_path(manifest: Path, override: str | None) -> Path | None:
+    """Locate the book's review/verdicts.csv from the manifest being played."""
+    if override:
+        return Path(override)
+    parent = manifest.resolve().parent
+    if parent.name == "review":
+        return parent / "verdicts.csv"
+    if parent.name == "05_quality":
+        return parent.parent / "review" / "verdicts.csv"
+    return None
+
+
+def _show(clip: dict, idx: int, total: int, verdict: str | None = None) -> None:
     parts = [f"[{idx + 1}/{total}] {clip.get('clip_id', clip.get('wav'))}"]
     if clip.get("duration"):
         parts.append(f"({clip['duration']}s)")
     if clip.get("status"):
         parts.append(clip["status"])
-    if clip.get("flags"):
-        flags = clip["flags"]
-        parts.append("|".join(flags) if isinstance(flags, list) else flags)
+    if _flags_str(clip):
+        parts.append(_flags_str(clip))
     if clip.get("cer") not in (None, ""):
         parts.append(f"cer={clip['cer']}")
+    if verdict:
+        parts.append(f"verdict={verdict}")
     print("\n" + " ".join(str(p) for p in parts))
     print(f"  text: {clip.get('text', '')}")
     if clip.get("asr_text"):
@@ -108,19 +132,25 @@ def main(args) -> int:
     clips = _load_clips(path)
     if args.status:
         clips = [c for c in clips if c.get("status") == args.status]
+    if getattr(args, "flag", None):
+        clips = [c for c in clips if args.flag in _flags_str(c).split("|")]
     if not clips:
         print("No clips to play.", file=sys.stderr)
         return 1
     if args.random:
         random.shuffle(clips)
 
+    verdict_path = _verdict_path(path, getattr(args, "verdicts", None))
+    verdicts = review.load_verdicts(verdict_path) if verdict_path else {}
+
     ffplay = _require("ffplay")
-    print(f"{len(clips)} clips — any key: next, r: replay, b: back, q: quit")
+    print(f"{len(clips)} clips — any key: next, g: approve, x: reject, "
+          "r: replay, b: back, q: quit")
 
     idx = 0
     while 0 <= idx < len(clips):
         clip = clips[idx]
-        _show(clip, idx, len(clips))
+        _show(clip, idx, len(clips), verdicts.get(clip.get("clip_id")))
         proc = _play(ffplay, clip.get("wav", ""))
         try:
             key = _read_key()
@@ -133,6 +163,15 @@ def main(args) -> int:
             continue
         elif key == "b":
             idx = max(0, idx - 1)
+        elif key in ("g", "x"):
+            if verdict_path is None:
+                print("  !! no verdict file for this manifest; pass --verdicts PATH")
+                continue
+            verdict = "approve" if key == "g" else "reject"
+            review.save_verdict(verdict_path, clip["clip_id"], verdict, _flags_str(clip))
+            verdicts[clip["clip_id"]] = verdict
+            print(f"  -> {verdict}")
+            idx += 1
         else:
             idx += 1
     print()

@@ -74,6 +74,31 @@ def cmd_listen(args) -> int:
     return listen.main(args)
 
 
+def cmd_review_apply(args) -> int:
+    from . import review
+    from .manifest import read_jsonl, write_jsonl
+    from .stages.quality import _write_flagged
+    from .workspace import stage_manifest, work_book_dir
+
+    cfg = load_config(args.config)
+    manifest = stage_manifest(cfg, args.book, "quality")
+    if not manifest.exists():
+        logging.error("No quality manifest for %s; run quality first.", args.book)
+        return 1
+    clips = read_jsonl(manifest)
+    review_dir = work_book_dir(cfg, args.book) / "review"
+    verdicts = review.load_verdicts(review_dir / "verdicts.csv")
+    if not verdicts:
+        logging.warning("No verdicts recorded in %s", review_dir / "verdicts.csv")
+        return 0
+    review.apply_verdicts(clips, verdicts)
+    write_jsonl(manifest, clips)
+    _write_flagged(review_dir, clips)
+    logging.info("Re-run `ttsdata run --book %s --stage export --force` to update the dataset.",
+                 args.book)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ttsdata", description=__doc__)
     parser.add_argument("--config", help="Override config YAML merged on defaults")
@@ -108,7 +133,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--status", choices=["pass", "review", "reject"],
         help="Only clips with this quality status",
     )
+    p_listen.add_argument(
+        "--flag", help="Only clips carrying this quality flag (e.g. edge_noise)"
+    )
+    p_listen.add_argument(
+        "--verdicts", help="Verdict CSV path (default: derived from the manifest location)"
+    )
     p_listen.set_defaults(func=cmd_listen)
+
+    p_apply = sub.add_parser(
+        "review-apply", help="Fold audition verdicts into the quality manifest"
+    )
+    p_apply.add_argument("book", help="Book id")
+    p_apply.set_defaults(func=cmd_review_apply)
 
     return parser
 

@@ -78,6 +78,23 @@ ttsdata run --config config/cuda.yaml --book mybook   # GPU override
 All knobs live in [`config/default.yaml`](config/default.yaml); pass `--config`
 with a small override file to change models, device, thresholds, etc.
 
+### Review workflow
+
+Some defects (e.g. a grunt/creak fused to a clip edge — the `edge_noise` flag)
+can't be judged automatically; flagged clips get status `review` and are
+excluded from export until a human listens:
+
+```bash
+ttsdata listen data/work/mybook/05_quality/clips.jsonl --status review --flag edge_noise
+# g approves, x rejects; verdicts land in data/work/mybook/review/verdicts.csv
+ttsdata review-apply mybook                       # fold verdicts into the manifest
+ttsdata run --book mybook --stage export --force  # re-export with them applied
+```
+
+Verdicts are re-applied automatically at the end of every quality run, so they
+survive `--force` re-runs. Set `quality.reasr_reuse: true` to re-run quality
+without re-transcribing every clip (valid while segment output is unchanged).
+
 ## Status
 
 Implemented and tested end to end (synthetic audio):

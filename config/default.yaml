@@ -52,10 +52,19 @@ segment:
 quality:
   jobs: 0                     # clips checked in parallel; 0 = auto (with reasr_check: ASR worker sizing, else CPU count)
   reasr_check: true          # re-transcribe each clip and check CER (needs ASR; slow)
+  reasr_reuse: false          # reuse cer/asr_text from a previous quality run (only valid while segment output is unchanged)
   max_cer: 0.20               # reject clip if re-ASR char error rate exceeds this
   review_cer: 0.10            # flag (not reject) clips above this for manual review
   min_snr_db: 10.0
   max_silence_ratio: 0.5
+  edge_noise_check: true      # flag weak low-frequency noise fused to a clip edge (grunt/creak before or after the words)
+  edge_frame_ms: 10           # analysis frame for the edge check
+  edge_strong_rel: 0.30       # "speech" frame >= this fraction of the clip's p95 RMS
+  edge_weak_rel: 0.05         # candidate run frames >= this fraction (above noise floor)
+  edge_max_centroid_hz: 900   # run's median spectral centroid below => grunt/creak-like
+  edge_min_ms: 40             # run length that triggers the edge_noise flag
+  edge_lead_gap_ms: 0         # lead run may touch the word onset (prevoicing-shaped artifacts)
+  edge_tail_gap_ms: 30        # tail run must be detached from the last word by this much silence
 
 export:
   format: piper            # ljspeech (id|text|normalized, universal) | piper (file.wav|normalized)

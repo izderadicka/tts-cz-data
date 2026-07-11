@@ -115,3 +115,71 @@ def test_speech_regions_silent_audio_has_none():
     pytest.importorskip("faster_whisper")
     silence = np.zeros(16000 * 2, dtype=np.float32)
     assert vad.speech_regions(silence) == []
+
+
+# --- edge_noise_ms (leading/trailing speaker-noise detection) ---
+
+EDGE_SR = 16000
+
+
+def _tone(dur_s: float, amp: float, freq_hz: float) -> np.ndarray:
+    t = np.arange(int(dur_s * EDGE_SR)) / EDGE_SR
+    return (amp * np.sin(2 * np.pi * freq_hz * t)).astype(np.float32)
+
+
+def _spans(*parts: tuple[float, float, float]) -> np.ndarray:
+    """Concatenate (duration_s, amplitude, freq_hz) spans; amp 0 = silence."""
+    return np.concatenate([_tone(d, a, f) for d, a, f in parts])
+
+
+SPEECH = (1.0, 0.5, 1500.0)  # strong high-centroid "speech"
+GRUNT_AMP = 0.06             # weak relative to 0.5-amp speech
+
+
+def test_edge_noise_detects_low_freq_lead():
+    # silence | 60ms grunt | speech — the reference-clip shape
+    audio = _spans((0.3, 0.0, 0.0), (0.06, GRUNT_AMP, 150.0), SPEECH)
+    assert vad.edge_noise_ms(audio, EDGE_SR) >= 50
+
+
+def test_edge_noise_clean_onset():
+    audio = _spans((0.3, 0.0, 0.0), SPEECH)
+    assert vad.edge_noise_ms(audio, EDGE_SR) == 0.0
+
+
+def test_edge_noise_short_prevoicing_stays_below_flag_threshold():
+    # 20ms voiced lead: detected, but short enough for the caller's min_ms gate
+    audio = _spans((0.3, 0.0, 0.0), (0.02, GRUNT_AMP, 150.0), SPEECH)
+    assert vad.edge_noise_ms(audio, EDGE_SR) < 40
+
+
+def test_edge_noise_high_centroid_lead_ignored():
+    # a breath/fricative-like lead (white noise, centroid >> 900 Hz)
+    rng = np.random.default_rng(0)
+    breath = (GRUNT_AMP * rng.standard_normal(int(0.06 * EDGE_SR))).astype(np.float32)
+    audio = np.concatenate([_tone(0.3, 0.0, 0.0), breath, _tone(*SPEECH)])
+    assert vad.edge_noise_ms(audio, EDGE_SR) == 0.0
+
+
+def test_edge_noise_requires_pre_silence():
+    # gradual low-freq ramp into the word: weak span not preceded by silence
+    t = np.arange(int(0.3 * EDGE_SR)) / EDGE_SR
+    ramp = (np.linspace(0.04, 0.5, t.size) * np.sin(2 * np.pi * 150.0 * t)).astype(np.float32)
+    audio = np.concatenate([ramp, _tone(*SPEECH)])
+    assert vad.edge_noise_ms(audio, EDGE_SR) == 0.0
+
+
+def test_edge_noise_tail_island_via_reverse():
+    # speech | 100ms silence | 60ms grunt | silence — detached trailing island
+    audio = _spans(SPEECH, (0.1, 0.0, 0.0), (0.06, GRUNT_AMP, 150.0), (0.2, 0.0, 0.0))
+    assert vad.edge_noise_ms(audio[::-1], EDGE_SR, min_gap_ms=30) >= 50
+
+
+def test_edge_noise_tail_ignores_natural_decay():
+    # speech with a contiguous weak voiced decay, then silence
+    audio = _spans(SPEECH, (0.08, GRUNT_AMP, 150.0), (0.3, 0.0, 0.0))
+    assert vad.edge_noise_ms(audio[::-1], EDGE_SR, min_gap_ms=30) == 0.0
+
+
+def test_edge_noise_all_silence():
+    assert vad.edge_noise_ms(np.zeros(EDGE_SR), EDGE_SR) == 0.0

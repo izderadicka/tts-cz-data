@@ -62,6 +62,77 @@ def estimate_snr_db(samples: np.ndarray, sr: int) -> float:
     return 10.0 * np.log10(speech_p / max(noise_p, 1e-8))
 
 
+def edge_noise_ms(
+    samples: np.ndarray,
+    sr: int,
+    *,
+    frame_ms: int = 10,
+    strong_rel: float = 0.30,
+    weak_rel: float = 0.05,
+    max_centroid_hz: float = 900.0,
+    min_gap_ms: float = 0.0,
+) -> float:
+    """Duration (ms) of speaker noise fused to the clip's leading edge.
+
+    Audiobook narrators sometimes emit a short grunt/creak/thump right before
+    (or after) an utterance. Silero counts it as speech, so it survives
+    segmentation; whole-clip metrics don't see it. This scans the frames before
+    the first "strong" frame (>= ``strong_rel`` of the clip's 95th-pct RMS) for
+    the longest weak run (``weak_rel``..``strong_rel``) that rises out of
+    silence and whose median spectral centroid is below ``max_centroid_hz``
+    (voiced grunts are low-frequency; breaths/fricatives are not). Returns 0.0
+    when no run qualifies. The caller decides how many ms are suspicious —
+    short runs are often legitimate prevoicing of B/D-initial words.
+
+    Call on ``samples[::-1]`` to check the trailing edge; there, pass
+    ``min_gap_ms`` > 0 so only runs *detached* from the last word by silence
+    qualify (a contiguous weak tail is just natural voiced decay).
+    """
+    samples = to_mono(samples).astype(np.float64)
+    frame_len = max(1, int(sr * frame_ms / 1000))
+    n_frames = len(samples) // frame_len
+    if n_frames < 2:
+        return 0.0
+    frames = samples[: n_frames * frame_len].reshape(n_frames, frame_len)
+    rms = np.sqrt(np.mean(frames**2, axis=1) + 1e-12)
+    p95 = float(np.percentile(rms, 95))
+    strong = rms >= strong_rel * p95
+    if not strong.any():
+        return 0.0
+    i0 = int(np.argmax(strong))
+    floor = max(weak_rel * p95, 1e-4)
+    min_gap = int(round(min_gap_ms / frame_ms))
+
+    window = np.hanning(frame_len)
+    freqs = np.fft.rfftfreq(frame_len, 1.0 / sr)
+
+    def _centroid(i: int) -> float:
+        mag = np.abs(np.fft.rfft(frames[i] * window))
+        total = mag.sum()
+        return float((mag * freqs).sum() / total) if total > 0 else 0.0
+
+    best = 0.0
+    run_start: int | None = None
+    for f in range(i0 + 1):
+        weak = f < i0 and rms[f] >= floor
+        if weak and run_start is None:
+            run_start = f
+        elif not weak and run_start is not None:
+            # A genuine artifact is an island rising out of silence (the
+            # segment stage pads ~100 ms before the cut, so silence is there
+            # to see); a run touching clip start is a legit onset ramp.
+            preceded_by_silence = run_start > 0 and rms[run_start - 1] < floor
+            # ``min_gap`` silent frames must separate the run from the strong
+            # onset; a run ending at i0 itself has gap 0 (fused to the word).
+            gap_ok = i0 - f >= min_gap and all(rms[g] < floor for g in range(f, f + min_gap))
+            if preceded_by_silence and gap_ok:
+                centroid = float(np.median([_centroid(i) for i in range(run_start, f)]))
+                if centroid < max_centroid_hz:
+                    best = max(best, (f - run_start) * frame_ms)
+            run_start = None
+    return best
+
+
 def snap_end(
     rms: np.ndarray,
     frame_len: int,
