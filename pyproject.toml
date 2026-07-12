@@ -34,6 +34,14 @@ gpu = [
 quality = [
     "jiwer>=3.0",            # optional re-ASR CER check in stage 5
 ]
+# Stopgap Edge TTS proxy (ttsdata/serve/edge_proxy.py) — NOT a pipeline stage.
+# Temporary browser-reader voice while a Piper Czech voice is trained; safe to
+# drop this group and the serve/ package once Piper is ready.
+serve = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "edge-tts>=6.1",
+]
 dev = [
     "pytest>=7.4",
 ]
@@ -47,6 +55,9 @@ all = [
 
 [project.scripts]
 ttsdata = "ttsdata.cli:main"
+# Stopgap; needs the `serve` extra installed. Also runnable as
+# `python -m ttsdata.serve.edge_proxy`.
+ttsdata-edge-proxy = "ttsdata.serve.edge_proxy:main"
 
 [tool.setuptools.packages.find]
 include = ["ttsdata*"]

@@ -95,6 +95,41 @@ Verdicts are re-applied automatically at the end of every quality run, so they
 survive `--force` re-runs. Set `quality.reasr_reuse: true` to re-run quality
 without re-transcribing every clip (valid while segment output is unchanged).
 
+## Stopgap: Edge TTS proxy
+
+A small, **temporary** utility (`ttsdata/serve/edge_proxy.py`) that exposes
+Microsoft Edge's Czech "Read Aloud" neural voices (Antonín, Vlasta) over local
+HTTP, so a browser reader (foliate-js) has a decent-sounding Czech voice **while
+the Piper Czech voice is being trained**. It is deliberately not part of the
+pipeline and lives in its own `serve` extra. A server-side proxy is needed
+because browser JavaScript cannot set the WebSocket handshake headers Edge
+expects — the browser POSTs text and gets MP3 back.
+
+> ⚠️ Stopgap only. It relies on an **unofficial Microsoft endpoint** (via the
+> `edge-tts` library) that may change or break without notice. Delete the
+> `serve/` package and the `serve` extra once the Piper voice is ready.
+
+```bash
+uv sync --extra serve            # installs fastapi, uvicorn, edge-tts (not core deps)
+uv run ttsdata-edge-proxy        # -> http://127.0.0.1:8899
+# or: uv run python -m ttsdata.serve.edge_proxy
+# host/port: --host/--port flags, or $EDGE_PROXY_HOST / $EDGE_PROXY_PORT
+```
+
+Endpoints: `GET /voices` (Czech voices only) and `POST /tts`. Synthesize and
+save an MP3:
+
+```bash
+curl -s -X POST http://127.0.0.1:8899/tts \
+  -H 'Content-Type: application/json' \
+  -d '{"text": "Příliš žluťoučký kůň úpěl ďábelské ódy.", "voice": "cs-CZ-AntoninNeural"}' \
+  -o out.mp3
+```
+
+`rate` and `pitch` are optional Edge prosody forms (`"+10%"`, `"-5%"`, `"+0Hz"`).
+CORS is wide open for local dev; restrict `allow_origins` to the reader's real
+origin in production (see the comment in `edge_proxy.py`).
+
 ## Status
 
 Implemented and tested end to end (synthetic audio):
