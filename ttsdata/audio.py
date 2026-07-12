@@ -32,7 +32,10 @@ def probe(path: str | Path) -> dict:
         ffprobe, "-v", "error", "-print_format", "json",
         "-show_format", "-show_streams", str(path),
     ]
-    out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    out = subprocess.run(
+        cmd, check=True, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL,
+    ).stdout
     info = json.loads(out)
     audio_streams = [s for s in info.get("streams", []) if s.get("codec_type") == "audio"]
     stream = audio_streams[0] if audio_streams else {}
@@ -63,13 +66,16 @@ def decode_to_wav(
         sample_format, "pcm_s16le"
     )
     cmd = [
-        ffmpeg, "-y", "-i", str(src),
+        ffmpeg, "-nostdin", "-y", "-i", str(src),
         "-ac", str(channels),
         "-ar", str(sample_rate),
         "-acodec", codec,
         str(dst),
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(
+        cmd, check=True, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL,
+    )
     return dst
 
 
@@ -80,11 +86,13 @@ def measure_loudness(path: str | Path) -> dict | None:
     """
     ffmpeg = _require("ffmpeg")
     cmd = [
-        ffmpeg, "-i", str(path), "-af",
+        ffmpeg, "-nostdin", "-i", str(path), "-af",
         "loudnorm=I=-23:TP=-2:LRA=7:print_format=json",
         "-f", "null", "-",
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(
+        cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+    )
     # loudnorm prints the JSON block to stderr; grab the last {...} object.
     text = proc.stderr
     start = text.rfind("{")
